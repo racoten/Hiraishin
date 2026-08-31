@@ -1,0 +1,20 @@
+bin/
+*.o
+*.exe
+*.dll
+*.pico.bin
+*.manifest.json
+__pycache__/
+*.pyc
+
+# Test/demo files (not part of the PICO technique)
+src/runner.c
+src/interactive_test.c
+src/workmask_dll.c
+tools/test_workmask.py
+tools/workmask_gui.py
+tools/hir_verify.py
+hiraishin_runner.spec
+
+# Platform-specific build scripts
+build.ps1
