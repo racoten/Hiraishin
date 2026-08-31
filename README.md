@@ -2,7 +2,7 @@
 
 Per-function encrypt-at-rest for Crystal Palace PICOs. Function bodies are XOR-encrypted in the binary and only decrypted in memory when actively executing — re-encrypted the instant they return. Invisible to memory scanners, YARA rules, and static analysis at rest.
 
-Inspired by [MDSec Function Peekaboo](https://www.mdsec.co.uk/2025/10/function-peekaboo-crafting-self-masking-functions-using-llvm/). Built as a standalone [Crystal Palace](https://www.cobaltstrike.com/product/crystal-palace) PICO.
+Inspired by [MDSec Function Peekaboo](https://www.mdsec.co.uk/2025/10/function-peekaboo-crafting-self-masking-functions-using-llvm/). Built as a standalone [Crystal Palace](https://tradecraftgarden.org/crystalpalace.html) PICO.
 
 ## How It Works
 
