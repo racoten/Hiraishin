@@ -2,114 +2,7 @@
 
 Per-function encrypt-at-rest for Crystal Palace PICOs. Function bodies are XOR-encrypted in the binary and only decrypted in memory when actively executing — re-encrypted the instant they return. Invisible to memory scanners, YARA rules, and static analysis at rest.
 
-Inspired by [MDSec Function Peekaboo](https://www.mdsec.co.uk/2025/10/function-peekaboo-crafting-self-masking-functions-using-llvm/). Built as a standalone [Crystal Palace](https://www.cobaltstrike.com/product/crystal-palace) PICO — works with Cobalt Strike, Sliver, Adaptix, Mythic, or any PICO-compatible C2.
-
-## Background
-
-### The Problem
-
-Modern EDRs and memory scanners operate on a simple premise: if code exists in executable memory, it can be read and analyzed. During sleep intervals, C2 agents encrypt their entire code section (via techniques like Ekko, Foliage, or Kraken) — but between check-ins, when the agent is actually *running*, every function sits in cleartext. A memory scanner that fires during execution can signature-match any function body, find YARA hits on opcode patterns, or identify known tool fingerprints.
-
-Sleep obfuscation protects the dormant agent. WorkMask protects the *active* agent. Functions are only cleartext for the microseconds they're executing — invisible at every other moment.
-
-### Origin: Function Peekaboo
-
-In October 2025, MDSec published [Function Peekaboo](https://www.mdsec.co.uk/2025/10/function-peekaboo-crafting-self-masking-functions-using-llvm/) — an LLVM compiler pass that automatically wraps functions with encrypt/decrypt stubs. Functions marked with a `REG_` prefix get their bodies XOR-encrypted in the final binary. The LLVM pass injects `peekaboo_enter()` before each function and `peekaboo_exit()` after the return, toggling `VirtualProtect` and XOR on every call.
-
-The original Peekaboo uses a **single-byte XOR key** (only the low byte of a 32-bit value), which barely shifts entropy. It also targets PE executables with absolute virtual addresses, tying it to a specific binary format.
-
-### Hiraishin: Adapting for Crystal Palace
-
-Hiraishin (雷神, "Thunder God" — named after the Flying Thunder God technique from Naruto, a teleportation seal that appears where you need it and vanishes when you don't) takes the Peekaboo concept and rebuilds it as a **Crystal Palace PICO** — a Position-Independent Code Object that works with any C2 framework.
-
-Key changes from the original Peekaboo:
-
-- **4-byte rolling XOR** instead of single-byte — all 4 key bytes participate, raising encrypted entropy from ~5.0 to ~6.5 bits/byte
-- **Position-independent addressing** — relative offsets from code base instead of absolute VAs, so it works at any load address across disparate memory regions
-- **Crystal Palace DFR** — API calls resolved via Dynamic Function Resolution (ror13 hashing) at link time, no import table entries
-- **Sleep obfuscation integration** — `suspend()` re-encrypts everything before a sleep mask runs, `resume()` clears the flag so functions decrypt on-demand when the agent wakes
-- **C2-agnostic** — exports its API via `PicoGetExport()` hash tags; the PICO doesn't know or care what C2 loaded it
-- **Manual instrumentation** — uses `WORKMASK_CALL()` macros at call sites instead of requiring an LLVM compiler pass, making it portable to any build pipeline
-
-### How the Technique Works in Detail
-
-The system has three components: **metadata**, **runtime**, and **post-link encryption**.
-
-#### 1. Metadata (HIRMETA_ENTRY)
-
-Each protected function has a 32-byte metadata entry stored in the `.data` section:
-
-```c
-typedef struct {
-    int32_t   codeOffset;      // signed offset from code base to function body
-    uint32_t  funcSize;        // size of the encrypted region in bytes
-    uint32_t  xorKey;          // 4-byte rolling XOR key
-    uint32_t  prologueSkip;    // bytes to skip at function start
-    volatile long refCount;    // atomic reference count
-    uint32_t  flags;           // ENABLED, DECRYPTED, SUSPENDED
-    uint8_t   reserved[8];     // future use
-} HIRMETA_ENTRY;
-```
-
-At compile time, `funcSize` is set to `0xDEADBEEF` (a sentinel indicating "not yet patched"). The post-link tool fills in the real values.
-
-#### 2. Post-Link Encryption (hir_encrypt.py)
-
-After compilation, `hir_encrypt.py` processes the COFF object file:
-
-1. Parses the symbol table to find `REG_*` functions and their `g_meta_*` metadata entries
-2. Computes function sizes from symbol gaps in the `.text` section
-3. Generates random 4-byte XOR keys per function
-4. Patches each `HIRMETA_ENTRY` in the `.data` section — writes `codeOffset`, `funcSize`, and `xorKey`
-5. XOR-encrypts each function body in the `.text` section
-6. Outputs the encrypted `.o` file and a JSON manifest
-
-After this step, the function bodies are encrypted garbage on disk. The metadata tells the runtime where each function lives and how to decrypt it.
-
-#### 3. Runtime (workmask_enter / workmask_exit)
-
-At runtime, the enter/exit cycle works like this:
-
-**Enter (decrypt):**
-```
-1. Check: is WorkMask suspended? If yes, return (sleep mask is active)
-2. Check: is funcSize still the sentinel? If yes, return (metadata not patched)
-3. Atomically increment refCount
-4. If refCount went from 0 → 1 (first caller):
-   a. Compute funcAddr = codeBase + codeOffset + prologueSkip
-   b. VirtualProtect(funcAddr, funcSize, PAGE_READWRITE)
-   c. XOR the function body with the 4-byte rolling key
-   d. VirtualProtect(funcAddr, funcSize, PAGE_EXECUTE_READ)
-   e. Set DECRYPTED flag
-5. If refCount was already > 0: another thread already decrypted, skip
-```
-
-**Exit (re-encrypt):**
-```
-1. Atomically decrement refCount
-2. If refCount reached 0 (last caller):
-   a. VirtualProtect → PAGE_READWRITE
-   b. XOR again (symmetric — same operation encrypts)
-   c. VirtualProtect → PAGE_EXECUTE_READ
-   d. Clear DECRYPTED flag
-3. If refCount still > 0: other threads still executing, skip
-```
-
-The atomic refcounting handles concurrency: if thread A and thread B both call the same function, thread A's enter decrypts it, thread B's enter sees refCount > 0 and skips, both execute, thread B's exit decrements but doesn't re-encrypt (refCount still 1), thread A's exit decrements to 0 and re-encrypts. Recursive calls work the same way.
-
-**Suspend (for sleep obfuscation):**
-```
-1. Set suspended flag (enter/exit become no-ops)
-2. Walk all HIRMETA_ENTRY records
-3. For each with DECRYPTED flag set:
-   a. Reset refCount to 0
-   b. XOR re-encrypt the function body
-   c. Clear DECRYPTED flag
-```
-
-After suspend, every function body is encrypted. The sleep mask can then safely encrypt the entire code section without double-encrypting already-masked regions.
-
-**Resume:** Simply clears the suspended flag. Functions stay encrypted until the next `workmask_enter()` call — decrypt on demand, minimum exposure time.
+Inspired by [MDSec Function Peekaboo](https://www.mdsec.co.uk/2025/10/function-peekaboo-crafting-self-masking-functions-using-llvm/). Built as a standalone [Crystal Palace](https://www.cobaltstrike.com/product/crystal-palace) PICO.
 
 ## How It Works
 
@@ -119,7 +12,7 @@ AT REST          workmask_enter()        EXECUTING        workmask_exit()       
 │ E3 29 4E │───>│ VirtualProtect RW│───>│ 49 89 CA │───>│ VirtualProtect RW│───>│ E3 29 4E │
 │ D3 23 71 │    │ XOR decrypt      │    │ 49 89 D1 │    │ XOR encrypt      │    │ D3 23 71 │
 │ CC 1F 78 │    │ VirtualProtect RX│    │ 48 85 D2 │    │ VirtualProtect RX│    │ CC 1F 78 │
-│ (garbage) │    └──────────────────┘    │ (valid x86)│    └──────────────────┘    │ (garbage) │
+│ (garbage)│    └──────────────────┘    │  (x86)   │    └──────────────────┘    │ (garbage)│
 └──────────┘                            └──────────┘                            └──────────┘
 ```
 
@@ -231,16 +124,6 @@ suspend();          /* re-encrypt all before sleep */
 do_sleep();         /* Ekko, Foliage, etc. */
 resume();           /* functions decrypt on next call */
 ```
-
-### Supported C2 Frameworks
-
-| Framework | Integration |
-|-----------|-------------|
-| Cobalt Strike | Crystal-Kit or UDRL with PICO loading |
-| Sliver | CrystalSliver |
-| Adaptix | Maverick / StealthPalace |
-| Mythic | Xenon agent |
-| Custom | Any loader using LibTCG |
 
 ## API Reference
 
