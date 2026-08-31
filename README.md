@@ -153,6 +153,6 @@ resume();           /* functions decrypt on next call */
 ## Acknowledgments
 
 - [Function Peekaboo](https://github.com/mdsecactivebreach/functionpeekaboo) by MDSec — the original LLVM-based self-masking technique
-- [Crystal Palace](https://www.cobaltstrike.com/product/crystal-palace) by Raphael Mudge — PIC linker and PICO format
+- [Crystal Palace](https://tradecraftgarden.org/crystalpalace.html) by Raphael Mudge — PIC linker and PICO format
 - [emerald_template](https://github.com/0xTriboulet/emerald_template) by 0xTriboulet — Crystal Palace project template
-- [The Tradecraft Garden](https://www.cobaltstrike.com/product/the-tradecraft-garden) — LibTCG runtime
+- [The Tradecraft Garden](https://tradecraftgarden.org/) — LibTCG runtime
