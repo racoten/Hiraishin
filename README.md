@@ -12,7 +12,7 @@ AT REST          workmask_enter()        EXECUTING        workmask_exit()       
 │ E3 29 4E │───>│ VirtualProtect RW│───>│ 49 89 CA │───>│ VirtualProtect RW│───>│ E3 29 4E │
 │ D3 23 71 │    │ XOR decrypt      │    │ 49 89 D1 │    │ XOR encrypt      │    │ D3 23 71 │
 │ CC 1F 78 │    │ VirtualProtect RX│    │ 48 85 D2 │    │ VirtualProtect RX│    │ CC 1F 78 │
-│ (garbage)│    └──────────────────┘    │  (x86)   │    └──────────────────┘    │ (garbage)│
+│ (garbage)│    └──────────────────┘    │  (x64)   │    └──────────────────┘    │ (garbage)│
 └──────────┘                            └──────────┘                            └──────────┘
 ```
 
